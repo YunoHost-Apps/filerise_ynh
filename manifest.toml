@@ -1,0 +1,64 @@
+#:schema https://raw.githubusercontent.com/YunoHost/apps/main/schemas/manifest.v2.schema.json
+
+packaging_format = 2
+
+id = "filerise"
+name = "FileRise"
+description.en = "Web file manager"
+description.fr = "Gestionnaire de fichiers Web"
+
+version = "1.3.9~ynh1"
+
+maintainers = ["eric_G"]
+
+[upstream]
+license = "MIT"
+demo = "https://demo.filerise.net/"
+code = "https://github.com/error311/FileRise"
+
+[integration]
+yunohost = ">= 12.0.9"
+helpers_version = "2.1"
+architectures = "all"
+multi_instance = true
+
+ldap = false
+
+sso = false
+
+disk = "50M"
+ram.build = "50M"
+ram.runtime = "50M"
+
+[install]
+    [install.domain]
+    type = "domain"
+
+    [install.init_main_permission]
+    type = "group"
+    default = "visitors"
+
+[resources]
+
+    [resources.sources]
+
+    [resources.sources.main]
+    url = "https://github.com/error311/FileRise/archive/refs/tags/v1.3.9.tar.gz"
+    sha256 = "ffd9c3437dcfb76a00e728d9a39a9076dc71ba8a2474039f34f7eb25385d83cb"
+
+    autoupdate.strategy = "latest_github_tag"
+
+    [resources.system_user]
+
+    [resources.install_dir]
+    group = "www-data:r-x"
+
+    [resources.data_dir]
+    subdirs = ["uploads", "users", "metadata"]
+    group = "www-data:rx"
+
+    [resources.permissions]
+    main.url = "/"
+
+    [resources.apt]
+    packages = "php8.4-json, php8.4-curl, php8.4-zip, php8.4-mbstring"
