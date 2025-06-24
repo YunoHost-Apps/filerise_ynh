@@ -1,1 +1,1 @@
-Ceci est une fausse description des fonctionalités de l'app
+Un gestionnaire de fichiers web moderne et auto-hébergé. Téléchargez, organisez et partagez des fichiers ou des dossiers via une interface web élégante. FileRise est à la fois léger et puissant : considérez-le comme votre disque dur personnel que vous contrôlez. Avec des téléchargements par glisser-déposer, une édition dans le navigateur, des connexions utilisateur sécurisées (avec prise en charge SSO et 2FA) et un partage en un clic.

@@ -22,6 +22,9 @@ ynh_script_progression "Upgrading source files..."
 
 ynh_setup_source --dest_dir="$install_dir" --full_replace --keep="config/config.php"
 
+chown -R $app:www-data $data_dir/uploads $data_dir/users $data_dir/metadata
+chmod -R 775 $data_dir/uploads $data_dir/users $data_dir/metadata
+
 #=================================================
 # UPDATE A CONFIG FILE
 #=================================================
