@@ -1,1 +1,1 @@
-This is a dummy description of this app features
+A modern, self-hosted web file manager. Upload, organize, and share files or folders through a sleek web interface. FileRise is lightweight yet powerful: think of it as your personal cloud drive that you control. With drag-and-drop uploads, in-browser editing, secure user logins (with SSO and 2FA support), and one-click sharing.
