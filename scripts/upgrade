@@ -27,9 +27,9 @@ chmod -R 775 $data_dir/uploads $data_dir/users $data_dir/metadata
 #=================================================
 # UPDATE A CONFIG FILE
 #=================================================
-#ynh_script_progression "Updating $app's configuration files..."
+ynh_script_progression "Updating $app's configuration files..."
 
-#ynh_config_add --template="config.php" --destination="$install_dir/config/config.php"
+ynh_config_add --template="config.php" --destination="$install_dir/config/config.php"
 
 #=================================================
 # REAPPLY SYSTEM CONFIGURATION
