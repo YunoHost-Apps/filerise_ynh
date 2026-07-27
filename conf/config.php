@@ -1,41 +1,187 @@
 <?php
+declare(strict_types=1);
 // config.php
 
-// Prevent caching
-header("Cache-Control: no-cache, must-revalidate");
-header("Pragma: no-cache");
-header("Expires: Sat, 26 Jul 1997 05:00:00 GMT");
-header("Expires: 0");
-
-// Security headers
-header('X-Content-Type-Options: nosniff');
-header("X-Frame-Options: SAMEORIGIN");
-header("Referrer-Policy: no-referrer-when-downgrade");
-header("Permissions-Policy: geolocation=(), microphone=(), camera=()");
-header("X-XSS-Protection: 1; mode=block");
-if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
-    header("Strict-Transport-Security: max-age=31536000; includeSubDomains; preload");
-}
-
 // Define constants
-define('PERSISTENT_TOKENS_KEY', '__KEY__');
-define('PROJECT_ROOT', '__INSTALL_DIR__/');
-define('UPLOAD_DIR',    '__DATA_DIR__/uploads/');
-define('USERS_DIR',     '__DATA_DIR__/users/');
+define('PROJECT_ROOT', '__INSTALL_DIR__');
+$autoload = PROJECT_ROOT . '/vendor/autoload.php';
+if (is_file($autoload)) {
+    require_once $autoload;
+} else {
+    $shimWarn = getenv('FR_SHIM_WARN');
+    if ($shimWarn !== false && $shimWarn !== '' && $shimWarn !== '0') {
+        error_log('FileRise: missing vendor/autoload.php; run composer install or deploy vendor/.');
+    }
+}
+$testUploadDir = getenv('FR_TEST_UPLOAD_DIR');
+$testUsersDir  = getenv('FR_TEST_USERS_DIR');
+$testMetaDir   = getenv('FR_TEST_META_DIR');
+define(
+    'UPLOAD_DIR',
+    ($testUploadDir !== false && $testUploadDir !== '')
+        ? rtrim($testUploadDir, "/\\") . '/'
+        : '__DATA_DIR__/uploads/'
+);
+define(
+    'USERS_DIR',
+    ($testUsersDir !== false && $testUsersDir !== '')
+        ? rtrim($testUsersDir, "/\\") . '/'
+        : '__DATA_DIR__/users/'
+);
 define('USERS_FILE',    'users.txt');
-define('META_DIR',      '__DATA_DIR__/metadata/');
+define(
+    'META_DIR',
+    ($testMetaDir !== false && $testMetaDir !== '')
+        ? rtrim($testMetaDir, "/\\") . '/'
+        : '__DATA_DIR__/metadata/'
+);
 define('META_FILE',     'file_metadata.json');
 define('TRASH_DIR',     UPLOAD_DIR . 'trash/');
-define('TIMEZONE',      '__TIMEZONE__');
-define('DATE_TIME_FORMAT','d/m/y  h:iA');
-define('TOTAL_UPLOAD_SIZE','5G');
+define('TIMEZONE',      'America/New_York');
+define('DATE_TIME_FORMAT','m/d/y  h:iA');
+define('TOTAL_UPLOAD_SIZE', '5G');
 define('REGEX_FOLDER_NAME','/^(?!^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$)(?!.*[. ]$)(?:[^<>:"\/\\\\|?*\x00-\x1F]{1,255})(?:[\/\\\\][^<>:"\/\\\\|?*\x00-\x1F]{1,255})*$/xu');
 define('PATTERN_FOLDER_NAME','[\p{L}\p{N}_\-\s\/\\\\]+');
 define('REGEX_FILE_NAME', '/^[^\x00-\x1F\/\\\\]{1,255}$/u');
-define('REGEX_USER',       '/^[\p{L}\p{N}_\- ]+$/u');
+define('REGEX_USER',       '/^(?!\.{1,2}$)[\p{L}\p{N}_\- .@]+$/u');
+define('FR_DEMO_MODE', false);
 
 date_default_timezone_set(TIMEZONE);
 
+if (!defined('DEFAULT_BYPASS_OWNERSHIP')) define('DEFAULT_BYPASS_OWNERSHIP', false);
+if (!defined('DEFAULT_CAN_SHARE'))        define('DEFAULT_CAN_SHARE', true);
+if (!defined('DEFAULT_CAN_ZIP'))          define('DEFAULT_CAN_ZIP', true);
+if (!defined('DEFAULT_VIEW_OWN_ONLY'))    define('DEFAULT_VIEW_OWN_ONLY', false);
+define('FOLDER_OWNERS_FILE', META_DIR . 'folder_owners.json');
+define('ACL_INHERIT_ON_CREATE', true);
+// Hidden file used to preserve empty remote folders (S3 prefixes, etc.).
+if (!defined('FR_REMOTE_DIR_MARKER')) define('FR_REMOTE_DIR_MARKER', '.filerise_keep');
+// ONLYOFFICE integration overrides (uncomment and set as needed)
+/*
+define('ONLYOFFICE_ENABLED', false);
+define('ONLYOFFICE_JWT_SECRET', 'test123456');
+define('ONLYOFFICE_DOCS_ORIGIN', 'http://192.168.1.61'); // your Document Server
+define('ONLYOFFICE_DEBUG', true);
+*/
+if (!defined('OFFICE_SNIPPET_MAX_BYTES')) {
+    define('OFFICE_SNIPPET_MAX_BYTES', 5 * 1024 * 1024); // 5 MiB
+}
+
+if (!defined('OIDC_TOKEN_ENDPOINT_AUTH_METHOD')) {
+    define('OIDC_TOKEN_ENDPOINT_AUTH_METHOD', 'client_secret_basic'); // default
+}
+// --- Optional: OIDC → FileRise integration ----------------------------
+
+// Auto-create users from OIDC when no users.txt match.
+if (!defined('FR_OIDC_AUTO_CREATE')) {
+    $envVal = getenv('FR_OIDC_AUTO_CREATE');
+    if ($envVal !== false && $envVal !== '') {
+        $val = strtolower(trim((string)$envVal));
+        define('FR_OIDC_AUTO_CREATE', in_array($val, ['1', 'true', 'yes', 'on'], true));
+    } else {
+        define('FR_OIDC_AUTO_CREATE', true);
+    }
+}
+
+// Claim that contains IdP groups/roles (typical: "groups" or "roles").
+if (!defined('FR_OIDC_GROUP_CLAIM')) {
+    $envVal = getenv('FR_OIDC_GROUP_CLAIM');
+    define(
+        'FR_OIDC_GROUP_CLAIM',
+        ($envVal !== false && trim((string)$envVal) !== '') ? trim((string)$envVal) : 'groups'
+    );
+}
+
+// Optional extra OIDC scopes to request (space/comma separated).
+if (!defined('FR_OIDC_EXTRA_SCOPES')) {
+    $envVal = getenv('FR_OIDC_EXTRA_SCOPES');
+    define('FR_OIDC_EXTRA_SCOPES', ($envVal !== false) ? trim((string)$envVal) : '');
+}
+
+// Name of an IdP group that should be treated as "FileRise admin".
+if (!defined('FR_OIDC_ADMIN_GROUP')) {
+    $envVal = getenv('FR_OIDC_ADMIN_GROUP');
+    if ($envVal !== false) {
+        define('FR_OIDC_ADMIN_GROUP', trim((string)$envVal));
+    } else {
+        define('FR_OIDC_ADMIN_GROUP', 'filerise-admins');
+    }
+}
+
+// Prefix for IdP groups that should map into FileRise Pro groups.
+// Example: IdP group "frp_clients_acme" → Pro group "clients_acme".
+if (!defined('FR_OIDC_PRO_GROUP_PREFIX')) {
+    $envVal = getenv('FR_OIDC_PRO_GROUP_PREFIX');
+    define('FR_OIDC_PRO_GROUP_PREFIX', ($envVal !== false) ? trim((string)$envVal) : '');
+}
+// Optional env/constant override: if set, it wins; if not set, UI setting is used.
+if (!defined('FR_OIDC_ALLOW_DEMOTE')) {
+    $envVal = getenv('FR_OIDC_ALLOW_DEMOTE');
+
+    if ($envVal !== false && $envVal !== '') {
+        $val = strtolower(trim((string)$envVal));
+        define('FR_OIDC_ALLOW_DEMOTE', $val === '1' || $val === 'true');
+    }
+    // IMPORTANT: no "else" here ⇒ if env is not set, we do NOT define the constant,
+    // so AuthModel::isOidcDemoteAllowed() will fall back to AdminModel::getConfig().
+}
+if (!defined('FR_OIDC_DEBUG')) {
+    $envVal = getenv('FR_OIDC_DEBUG');
+    if ($envVal !== false && $envVal !== '') {
+        $val = strtolower(trim((string)$envVal));
+        define('FR_OIDC_DEBUG', in_array($val, ['1', 'true', 'yes', 'on'], true));
+    } else {
+        define('FR_OIDC_DEBUG', false);
+    }
+}
+// Optional: trusted proxy IP resolution for rate limiting/logging
+// Set FR_TRUSTED_PROXIES to a comma-separated list of IPs/CIDRs (e.g. "127.0.0.1,10.0.0.0/8").
+if (!defined('FR_TRUSTED_PROXIES')) {
+    $envVal = getenv('FR_TRUSTED_PROXIES');
+    define('FR_TRUSTED_PROXIES', ($envVal !== false && $envVal !== '') ? $envVal : '');
+}
+// Which header to trust when REMOTE_ADDR matches FR_TRUSTED_PROXIES.
+if (!defined('FR_IP_HEADER')) {
+    $envVal = getenv('FR_IP_HEADER');
+    define('FR_IP_HEADER', ($envVal !== false && $envVal !== '') ? $envVal : 'X-Forwarded-For');
+}
+// Optional: WebDAV max upload size in bytes (0 = unlimited)
+if (!defined('FR_WEBDAV_MAX_UPLOAD_BYTES')) {
+    $envVal = getenv('FR_WEBDAV_MAX_UPLOAD_BYTES');
+    if ($envVal !== false && $envVal !== '') {
+        $val = (int)$envVal;
+        define('FR_WEBDAV_MAX_UPLOAD_BYTES', $val > 0 ? $val : 0);
+    } else {
+        define('FR_WEBDAV_MAX_UPLOAD_BYTES', 0);
+    }
+}
+// Background worker mode for transfer / zip / scan jobs.
+// auto  = prefer background workers, fallback when unavailable
+// async = require background workers
+// sync  = force foreground execution where supported
+if (!defined('FR_WORKER_MODE')) {
+    $envVal = getenv('FR_WORKER_MODE');
+    $mode = strtolower(trim($envVal === false ? '' : (string)$envVal));
+    if (!in_array($mode, ['auto', 'async', 'sync'], true)) {
+        $mode = 'auto';
+    }
+    define('FR_WORKER_MODE', $mode);
+}
+// Antivirus / ClamAV (optional)
+// If VIRUS_SCAN_ENABLED is set in the environment, it overrides the admin setting.
+// If it is not set, we don't define the constant and the admin checkbox controls scanning.
+$envScanRaw = getenv('VIRUS_SCAN_ENABLED');
+if ($envScanRaw !== false && $envScanRaw !== '') {
+    $val = strtolower(trim((string)$envScanRaw));
+    $enabled = in_array($val, ['1', 'true', 'yes', 'on'], true);
+    define('VIRUS_SCAN_ENABLED', $enabled);
+}
+
+// Which scanner command to run. Can be "clamscan" or "clamdscan" (faster with clamd).
+define('VIRUS_SCAN_CMD', getenv('VIRUS_SCAN_CMD') ?: 'clamscan');
+
+// Optional: max time you consider acceptable for a scan (for logging / future timeout logic)
+define('VIRUS_SCAN_TIMEOUT', 60);
 
 // Encryption helpers
 function encryptData($data, $encryptionKey)
@@ -57,13 +203,203 @@ function decryptData($encryptedData, $encryptionKey)
     return openssl_decrypt($ct, $cipher, $encryptionKey, OPENSSL_RAW_DATA, $iv);
 }
 
-// Load encryption key
-$envKey = getenv('PERSISTENT_TOKENS_KEY');
-if ($envKey === false || $envKey === '') {
-    $encryptionKey = 'default_please_change_this_key';
-    error_log('WARNING: Using default encryption key. Please set PERSISTENT_TOKENS_KEY in your environment.');
-} else {
-    $encryptionKey = $envKey;
+function fr_get_persistent_tokens_key_file_path(): string
+{
+    return rtrim((string)META_DIR, "/\\") . DIRECTORY_SEPARATOR . 'persistent_tokens.key';
+}
+
+function fr_has_existing_persistent_key_state(): bool
+{
+    $stateFiles = [
+        rtrim((string)USERS_DIR, "/\\") . DIRECTORY_SEPARATOR . USERS_FILE,
+        rtrim((string)USERS_DIR, "/\\") . DIRECTORY_SEPARATOR . '.setup_complete',
+        rtrim((string)USERS_DIR, "/\\") . DIRECTORY_SEPARATOR . 'adminConfig.json',
+        rtrim((string)USERS_DIR, "/\\") . DIRECTORY_SEPARATOR . 'userPermissions.json',
+        rtrim((string)USERS_DIR, "/\\") . DIRECTORY_SEPARATOR . 'persistent_tokens.json',
+        rtrim((string)META_DIR, "/\\") . DIRECTORY_SEPARATOR . 'sources.json',
+        rtrim((string)META_DIR, "/\\") . DIRECTORY_SEPARATOR . 'share_links.json',
+        rtrim((string)META_DIR, "/\\") . DIRECTORY_SEPARATOR . 'share_folder_links.json',
+    ];
+
+    foreach ($stateFiles as $path) {
+        if (is_file($path) && filesize($path) > 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function fr_generate_persistent_tokens_key_file(string $keyFile): string
+{
+    $handle = @fopen($keyFile, 'c+');
+    if ($handle === false) {
+        throw new RuntimeException(
+            'FileRise could not create metadata/persistent_tokens.key. '
+            . 'Make the metadata directory writable or set PERSISTENT_TOKENS_KEY explicitly.'
+        );
+    }
+
+    try {
+        if (!flock($handle, LOCK_EX)) {
+            throw new RuntimeException('FileRise could not lock metadata/persistent_tokens.key.');
+        }
+
+        rewind($handle);
+        $existing = stream_get_contents($handle);
+        if ($existing !== false && trim($existing) !== '') {
+            return trim($existing);
+        }
+
+        $key = bin2hex(random_bytes(32));
+        if (!ftruncate($handle, 0) || !rewind($handle)) {
+            throw new RuntimeException('FileRise could not prepare metadata/persistent_tokens.key.');
+        }
+
+        $offset = 0;
+        $length = strlen($key);
+        while ($offset < $length) {
+            $bytes = fwrite($handle, substr($key, $offset));
+            if ($bytes === false || $bytes === 0) {
+                throw new RuntimeException('FileRise could not persist metadata/persistent_tokens.key.');
+            }
+            $offset += $bytes;
+        }
+        if (!fflush($handle)) {
+            throw new RuntimeException('FileRise could not flush metadata/persistent_tokens.key.');
+        }
+
+        @chmod($keyFile, 0600);
+        return $key;
+    } catch (Throwable $e) {
+        @ftruncate($handle, 0);
+        @fflush($handle);
+        throw $e;
+    } finally {
+        @flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+}
+
+function fr_resolve_persistent_tokens_key(): array
+{
+    static $resolved = null;
+    if (is_array($resolved)) {
+        return $resolved;
+    }
+
+    $defaultKey = 'default_please_change_this_key';
+    $publishedPlaceholders = [$defaultKey, 'please_change_this_@@'];
+
+    $envKeyRaw = getenv('PERSISTENT_TOKENS_KEY');
+    $envKey = trim($envKeyRaw === false ? '' : (string)$envKeyRaw);
+
+    $sourceHintRaw = getenv('PERSISTENT_TOKENS_KEY_SOURCE');
+    $sourceHint = trim($sourceHintRaw === false ? '' : (string)$sourceHintRaw);
+
+    $keyFile = fr_get_persistent_tokens_key_file_path();
+    $fileKey = '';
+    if (is_file($keyFile)) {
+        $raw = @file_get_contents($keyFile);
+        if ($raw !== false) {
+            $fileKey = trim((string)$raw);
+        }
+    }
+
+    $source = 'legacy_default';
+    $key = $defaultKey;
+    if ($envKey !== '' && !($sourceHint === 'legacy_default' && $fileKey !== '')) {
+        $key = $envKey;
+        if (in_array($sourceHint, ['env', 'file', 'generated_file', 'legacy_default'], true)) {
+            $source = $sourceHint;
+        } else {
+            $source = 'env';
+        }
+    } elseif ($fileKey !== '') {
+        $key = $fileKey;
+        $source = 'file';
+    } elseif ($sourceHint !== 'legacy_default' && !fr_has_existing_persistent_key_state()) {
+        $key = fr_generate_persistent_tokens_key_file($keyFile);
+        $source = 'generated_file';
+    }
+
+    $usesPublishedPlaceholder = in_array($key, $publishedPlaceholders, true);
+    $usesLegacyDefault = ($source === 'legacy_default');
+    $autoGenerated = ($source === 'generated_file');
+    $needsAttention = $usesLegacyDefault || $usesPublishedPlaceholder;
+
+    $warning = '';
+    $recommendedAction = '';
+    if ($usesLegacyDefault) {
+        $warning = 'FileRise is using the legacy built-in persistent tokens key because no explicit key is configured.';
+        $recommendedAction = 'Set a unique key for new installs. For existing installs, plan a controlled rotation because changing the key can invalidate remember-me tokens and break decryption of stored secrets until they are re-encrypted.';
+    } elseif ($usesPublishedPlaceholder) {
+        $warning = 'FileRise is using a published placeholder persistent tokens key value.';
+        $recommendedAction = 'Replace it with a unique key. For existing installs, rotate carefully because changing the key can invalidate remember-me tokens and break decryption of stored secrets until they are re-encrypted.';
+    } elseif ($autoGenerated) {
+        $recommendedAction = 'This install auto-generated a key and stored it on disk. Back up metadata/persistent_tokens.key or set PERSISTENT_TOKENS_KEY explicitly before migrating the instance.';
+    }
+
+    if ($needsAttention) {
+        error_log('WARNING: ' . $warning);
+    }
+
+    $resolved = [
+        'key' => $key,
+        'source' => $source,
+        'usesPublishedPlaceholder' => $usesPublishedPlaceholder,
+        'usesLegacyDefault' => $usesLegacyDefault,
+        'autoGenerated' => $autoGenerated,
+        'needsAttention' => $needsAttention,
+        'warning' => $warning,
+        'recommendedAction' => $recommendedAction,
+        'keyFilePresent' => ($fileKey !== ''),
+    ];
+
+    return $resolved;
+}
+
+function fr_load_persistent_tokens_key(): string
+{
+    $resolved = fr_resolve_persistent_tokens_key();
+    $key = (string)($resolved['key'] ?? '');
+    return $key;
+}
+
+function fr_get_persistent_tokens_key_status(): array
+{
+    $resolved = fr_resolve_persistent_tokens_key();
+    unset($resolved['key']);
+    return $resolved;
+}
+$encryptionKey = fr_load_persistent_tokens_key();
+// Ensure encryption key is always available via $GLOBALS, even when this file
+// is required from function scope (e.g. API helper bootstrap wrappers).
+$GLOBALS['encryptionKey'] = $encryptionKey;
+
+// Optional: ignore regex for indexing/listing (env wins; admin config as fallback)
+if (!defined('FR_IGNORE_REGEX')) {
+    $envIgnore = getenv('FR_IGNORE_REGEX');
+    if ($envIgnore !== false && trim((string)$envIgnore) !== '') {
+        define('FR_IGNORE_REGEX', (string)$envIgnore);
+    } else {
+        $cfgPath = USERS_DIR . 'adminConfig.json';
+        if (is_file($cfgPath)) {
+            $enc = @file_get_contents($cfgPath);
+            if ($enc !== false && $enc !== '') {
+                $dec = decryptData($enc, $encryptionKey);
+                if ($dec !== false) {
+                    $cfg = json_decode($dec, true);
+                    if (is_array($cfg) && isset($cfg['ignoreRegex']) && is_string($cfg['ignoreRegex'])) {
+                        $val = trim($cfg['ignoreRegex']);
+                        if ($val !== '') {
+                            define('FR_IGNORE_REGEX', $val);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Helper to load JSON permissions (with optional decryption)
@@ -71,16 +407,59 @@ function loadUserPermissions($username)
 {
     global $encryptionKey;
     $permissionsFile = USERS_DIR . 'userPermissions.json';
-    if (file_exists($permissionsFile)) {
-        $content = file_get_contents($permissionsFile);
-        $decrypted = decryptData($content, $encryptionKey);
-        $json = ($decrypted !== false) ? $decrypted : $content;
-        $perms = json_decode($json, true);
-        if (is_array($perms) && isset($perms[$username])) {
-            return !empty($perms[$username]) ? $perms[$username] : false;
-        }
+    if (!file_exists($permissionsFile)) {
+        return false;
     }
-    return false;
+
+    $content   = file_get_contents($permissionsFile);
+    $decrypted = decryptData($content, $encryptionKey);
+    $json      = ($decrypted !== false) ? $decrypted : $content;
+    $permsAll  = json_decode($json, true);
+
+    if (!is_array($permsAll)) {
+        return false;
+    }
+
+    // Try exact match first, then lowercase (since we store keys lowercase elsewhere)
+    $uExact = (string)$username;
+    $uLower = strtolower($uExact);
+
+    $row = $permsAll[$uExact] ?? $permsAll[$uLower] ?? null;
+
+    // Normalize: always return an array when found, else false (to preserve current callers’ behavior)
+    return is_array($row) ? $row : false;
+}
+
+function fr_local_user_exists($username): bool
+{
+    $username = trim((string)$username);
+    if ($username === '') {
+        return false;
+    }
+
+    return \FileRise\Domain\UserModel::getUserRole($username) !== null;
+}
+
+function fr_forget_authenticated_user(bool $clearRememberCookie = false): void
+{
+    if ($clearRememberCookie && !empty($_COOKIE['remember_me_token']) && class_exists(\FileRise\Domain\AuthModel::class)) {
+        $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+        \FileRise\Domain\AuthModel::revokeRememberToken((string)$_COOKIE['remember_me_token']);
+        setcookie('remember_me_token', '', time() - 3600, '/', '', $secure, true);
+        unset($_COOKIE['remember_me_token']);
+    }
+
+    unset(
+        $_SESSION['authenticated'],
+        $_SESSION['username'],
+        $_SESSION['isAdmin'],
+        $_SESSION['folderOnly'],
+        $_SESSION['readOnly'],
+        $_SESSION['disableUpload'],
+        $_SESSION['pending_login_user'],
+        $_SESSION['pending_login_secret'],
+        $_SESSION['pending_login_remember_me']
+    );
 }
 
 // Determine HTTPS usage
@@ -89,26 +468,45 @@ $secure = ($envSecure !== false)
     ? filter_var($envSecure, FILTER_VALIDATE_BOOLEAN)
     : (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
 
-// Choose session lifetime based on "remember me" cookie
-$defaultSession = 7200;           // 2 hours
-$persistentDays = 30 * 24 * 60 * 60; // 30 days
-$sessionLifetime = isset($_COOKIE['remember_me_token'])
-    ? $persistentDays
-    : $defaultSession;
 
-// Configure PHP session cookie and GC
-session_set_cookie_params([
-    'lifetime' => $sessionLifetime,
-    'path'     => '/',
-    'domain'   => '',      // adjust if you need a specific domain
-    'secure'   => $secure,
-    'httponly' => true,
-    'samesite' => 'Lax'
-]);
-ini_set('session.gc_maxlifetime', (string)$sessionLifetime);
+// PHP session lifetime (independent of "remember me")
+// Keep this reasonably short; "remember me" uses its own token.
+$defaultSession  = 7200;              // 2 hours
+$sessionLifetime = $defaultSession;
 
+// "Remember me" window (how long the persistent token itself is valid)
+// This is used in persistent_tokens.json, *not* for PHP session lifetime.
+$persistentDays  = 30 * 24 * 60 * 60; // 30 days
+
+/**
+ * Start session idempotently:
+ * - If no session: set cookie params + gc_maxlifetime, then session_start().
+ * - If session already active: DO NOT change ini/cookie params; optionally refresh cookie expiry.
+ */
 if (session_status() === PHP_SESSION_NONE) {
+    session_set_cookie_params([
+        'lifetime' => $sessionLifetime,
+        'path'     => '/',
+        'domain'   => '',      // adjust if you need a specific domain
+        'secure'   => $secure,
+        'httponly' => true,
+        'samesite' => 'Lax'
+    ]);
+    ini_set('session.gc_maxlifetime', (string)$sessionLifetime);
     session_start();
+} else {
+    // Optionally refresh the session cookie expiry to keep the user alive
+    $params = session_get_cookie_params();
+    if ($sessionLifetime > 0) {
+        setcookie(session_name(), session_id(), [
+            'expires'  => time() + $sessionLifetime,
+            'path'     => $params['path']     ?: '/',
+            'domain'   => $params['domain']   ?? '',
+            'secure'   => $secure,
+            'httponly' => true,
+            'samesite' => $params['samesite'] ?? 'Lax',
+        ]);
+    }
 }
 
 // CSRF token
@@ -116,30 +514,32 @@ if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
+if (!empty($_SESSION['authenticated']) && !fr_local_user_exists((string)($_SESSION['username'] ?? ''))) {
+    fr_forget_authenticated_user(true);
+}
 
-// Auto‑login via persistent token
+// Auto-login via persistent token
 if (empty($_SESSION["authenticated"]) && !empty($_COOKIE['remember_me_token'])) {
-    $tokFile = USERS_DIR . 'persistent_tokens.json';
-    $tokens = [];
-    if (file_exists($tokFile)) {
-        $enc = file_get_contents($tokFile);
-        $dec = decryptData($enc, $encryptionKey);
-        $tokens = json_decode($dec, true) ?: [];
-    }
-    $token = $_COOKIE['remember_me_token'];
-    if (!empty($tokens[$token])) {
-        $data = $tokens[$token];
-        if ($data['expiry'] >= time()) {
-            $_SESSION["authenticated"] = true;
-            $_SESSION["username"]      = $data["username"];
-            $_SESSION["folderOnly"]    = loadUserPermissions($data["username"]);
-            $_SESSION["isAdmin"]       = !empty($data["isAdmin"]);
-        } else {
-            // expired — clean up
-            unset($tokens[$token]);
-            file_put_contents($tokFile, encryptData(json_encode($tokens, JSON_PRETTY_PRINT), $encryptionKey), LOCK_EX);
-            setcookie('remember_me_token', '', time() - 3600, '/', '', $secure, true);
+    $payload = \FileRise\Domain\AuthModel::consumeRememberToken($_COOKIE['remember_me_token']);
+    if ($payload) {
+        // NEW: mitigate session fixation
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_regenerate_id(true);
         }
+
+        $_SESSION["authenticated"] = true;
+        $_SESSION["username"]      = $payload["username"];
+        $perms = loadUserPermissions($payload["username"]);
+        $_SESSION["folderOnly"]    = $perms['folderOnly']    ?? false;
+        $_SESSION["readOnly"]      = $perms['readOnly']      ?? false;
+        $_SESSION["disableUpload"] = $perms['disableUpload'] ?? false;
+        $_SESSION["isAdmin"]       = (\FileRise\Domain\AuthModel::getUserRole($payload["username"]) === '1');
+
+        if (!empty($payload['token']) && !empty($payload['expiry'])) {
+            setcookie('remember_me_token', $payload['token'], (int)$payload['expiry'], '/', '', $secure, true);
+        }
+    } else {
+        setcookie('remember_me_token', '', time() - 3600, '/', '', $secure, true);
     }
 }
 
@@ -152,7 +552,8 @@ $cfgAuthHeader = 'X_REMOTE_USER';
 if (file_exists($adminConfigFile)) {
     $encrypted = file_get_contents($adminConfigFile);
     $decrypted = decryptData($encrypted, $encryptionKey);
-    $adminCfg  = json_decode($decrypted, true) ?: [];
+    $json      = ($decrypted !== false) ? $decrypted : $encrypted;
+    $adminCfg  = is_string($json) ? (json_decode($json, true) ?: []) : [];
 
     $loginOpts = $adminCfg['loginOptions'] ?? [];
 
@@ -176,34 +577,373 @@ define('AUTH_HEADER',  $cfgAuthHeader);
 if (AUTH_BYPASS) {
     $hdrKey = AUTH_HEADER;   // e.g. "HTTP_X_REMOTE_USER"
     if (!empty($_SERVER[$hdrKey])) {
-        // regenerate once per session
-        if (empty($_SESSION['authenticated'])) {
-            session_regenerate_id(true);
+        if (!\FileRise\Domain\AuthModel::isRequestFromTrustedProxy()) {
+            $remote = preg_replace('/[^A-Fa-f0-9:\.]/', '', (string)($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+            if ($remote === '') {
+                $remote = 'unknown';
+            }
+            error_log("FileRise: ignored proxy-auth header from untrusted source {$remote}; set FR_TRUSTED_PROXIES for proxy-header login.");
+        } else {
+            // regenerate once per session
+            if (empty($_SESSION['authenticated'])) {
+                session_regenerate_id(true);
+            }
+
+            $username = $_SERVER[$hdrKey];
+            $_SESSION['authenticated'] = true;
+            $_SESSION['username']      = $username;
+
+            // ◾ lookup actual role instead of forcing admin
+            $role = \FileRise\Domain\AuthModel::getUserRole($username);
+            $_SESSION['isAdmin'] = ($role === '1');
+
+            // carry over any folder/read/upload perms
+            $perms = loadUserPermissions($username) ?: [];
+            $_SESSION['folderOnly']    = $perms['folderOnly']    ?? false;
+            $_SESSION['readOnly']      = $perms['readOnly']      ?? false;
+            $_SESSION['disableUpload'] = $perms['disableUpload'] ?? false;
         }
-
-        $username = $_SERVER[$hdrKey];
-        $_SESSION['authenticated'] = true;
-        $_SESSION['username']      = $username;
-
-        // ◾ lookup actual role instead of forcing admin
-        require_once PROJECT_ROOT . '/src/models/AuthModel.php';
-        $role = AuthModel::getUserRole($username);
-        $_SESSION['isAdmin'] = ($role === '1');
-
-        // carry over any folder/read/upload perms
-        $perms = loadUserPermissions($username) ?: [];
-        $_SESSION['folderOnly']    = $perms['folderOnly']    ?? false;
-        $_SESSION['readOnly']      = $perms['readOnly']      ?? false;
-        $_SESSION['disableUpload'] = $perms['disableUpload'] ?? false;
     }
 }
-// Share URL fallback
-define('BASE_URL', 'http://__DOMAIN____PATH__/');
-if (strpos(BASE_URL, '__DOMAIN__') !== false) {
-    $defaultShare = isset($_SERVER['HTTP_HOST'])
-        ? "http://{$_SERVER['HTTP_HOST']}/api/file/share.php"
-        : "http://localhost/api/file/share.php";
+
+// Share URL fallback (keep BASE_URL behavior)
+define('BASE_URL', 'http://yourwebsite/uploads/');
+
+// Detect scheme correctly (works behind proxies too)
+$proto = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? (
+           (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http'
+         );
+$host  = $_SERVER['HTTP_HOST'] ?? 'localhost';
+
+// Base path support (optional):
+// - If FileRise is served under a subpath (e.g. https://example.com/fr),
+//   set `FR_BASE_PATH=/fr` or send `X-Forwarded-Prefix: /fr` from the proxy.
+// - When not set, defaults to "" (root install) to preserve existing behavior.
+function fr_normalize_base_path($raw)
+{
+    $p = trim((string)$raw);
+    if ($p === '' || $p === '/') return '';
+    // Reject full URLs or scheme-relative prefixes to avoid open redirects.
+    if (preg_match('~^[a-z][a-z0-9+.-]*://~i', $p)) return '';
+    if (strpos($p, '//') === 0) return '';
+    // Normalize slashes and strip query/fragment if provided.
+    $p = str_replace('\\', '/', $p);
+    $p = preg_replace('/[?#].*$/', '', $p);
+    if ($p === '' || $p === '/') return '';
+    if ($p[0] !== '/') $p = '/' . $p;
+    $p = preg_replace('~/+~', '/', $p);
+    // Disallow path traversal segments.
+    if (preg_match('~(^|/)\.\.(?:/|$)~', $p)) return '';
+    // strip trailing slashes
+    return preg_replace('~/+$~', '', $p) ?: '';
+}
+
+function fr_detect_base_path()
+{
+    // 1) Explicit env override
+    $env = getenv('FR_BASE_PATH');
+    if ($env !== false && trim((string)$env) !== '') {
+        return fr_normalize_base_path($env);
+    }
+
+    // 2) Reverse proxies often provide this
+    $xfp = $_SERVER['HTTP_X_FORWARDED_PREFIX'] ?? '';
+    if (is_string($xfp) && trim($xfp) !== '') {
+        return fr_normalize_base_path($xfp);
+    }
+
+    // 3) If deployed in a real subdirectory (not stripped by proxy),
+    //    SCRIPT_NAME/REQUEST_URI will include the prefix (e.g. /fr/api/...).
+    $candidates = [];
+    if (!empty($_SERVER['SCRIPT_NAME']) && is_string($_SERVER['SCRIPT_NAME'])) $candidates[] = $_SERVER['SCRIPT_NAME'];
+    if (!empty($_SERVER['REQUEST_URI']) && is_string($_SERVER['REQUEST_URI'])) {
+        $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+        if (is_string($path) && $path !== '') $candidates[] = $path;
+    }
+
+    foreach ($candidates as $p) {
+        if (preg_match('~^(.*)/api(?:/|\\.php$)~i', $p, $m)) return fr_normalize_base_path($m[1]);
+        if (preg_match('~^(.*)/webdav\\.php$~i', $p, $m)) return fr_normalize_base_path($m[1]);
+        if (preg_match('~^(.*)/index\\.html$~i', $p, $m)) return fr_normalize_base_path($m[1]);
+        if (preg_match('~^(.*)/portal-login\\.html$~i', $p, $m)) return fr_normalize_base_path($m[1]);
+        if (preg_match('~^(.*)/portal\\.html$~i', $p, $m)) return fr_normalize_base_path($m[1]);
+    }
+
+    return '';
+}
+
+if (!defined('FR_BASE_PATH')) {
+    define('FR_BASE_PATH', fr_detect_base_path());
+}
+
+function fr_with_base_path($path)
+{
+    $p = (string)$path;
+    $bp = defined('FR_BASE_PATH') ? (string)FR_BASE_PATH : '';
+    if ($bp === '' || $p === '' || $p[0] !== '/') return $p;
+    if ($p === $bp || strpos($p, $bp . '/') === 0) return $p;
+    return $bp . $p;
+}
+
+function fr_profile_pic_url(string $filename): string
+{
+    $name = trim((string)$filename);
+    if ($name === '') return '';
+    $name = str_replace('\\', '/', $name);
+    $name = basename($name);
+    if ($name === '' || $name === '.' || $name === '..') return '';
+    return '/api/public/profilePic.php?file=' . rawurlencode($name);
+}
+
+function fr_normalize_profile_pic_url(string $url): string
+{
+    $raw = trim((string)$url);
+    if ($raw === '') return '';
+
+    // Leave absolute http(s) URLs unchanged.
+    if (preg_match('~^https?://~i', $raw)) return $raw;
+
+    // Ensure a leading slash for site-relative paths.
+    if ($raw[0] !== '/') $raw = '/' . ltrim($raw, '/');
+
+    $base = defined('FR_BASE_PATH') ? (string)FR_BASE_PATH : '';
+    $prefix = '';
+    if ($base !== '' && $raw !== $base && strpos($raw, $base . '/') === 0) {
+        $prefix = $base;
+        $raw = substr($raw, strlen($base));
+        if ($raw === '') $raw = '/';
+    }
+
+    if (preg_match('~^/uploads/profile_pics/([^/?#]+)~', $raw, $m)) {
+        return $prefix . fr_profile_pic_url($m[1]);
+    }
+    if (preg_match('~^/api/public/profilePic\.php\\?file=~', $raw)) {
+        return $prefix . $raw;
+    }
+
+    return $prefix . $raw;
+}
+
+if (strpos(BASE_URL, 'yourwebsite') !== false) {
+    $defaultShare = "{$proto}://{$host}" . fr_with_base_path("/api/file/share.php");
 } else {
     $defaultShare = rtrim(BASE_URL, '/') . "/api/file/share.php";
 }
-define('SHARE_URL', getenv('SHARE_URL') ?: $defaultShare);
+
+// Final: env var wins, else fallback
+// Optional: Published URL override (preferred: env, optional: admin config).
+// This is the canonical URL FileRise should advertise (e.g. "https://example.com/fr").
+function fr_sanitize_http_url($url)
+{
+    $u = trim((string)$url);
+    if ($u === '') return '';
+    if (!filter_var($u, FILTER_VALIDATE_URL)) return '';
+    $scheme = strtolower(parse_url($u, PHP_URL_SCHEME) ?: '');
+    if ($scheme !== 'http' && $scheme !== 'https') return '';
+    return $u;
+}
+
+function fr_read_admin_config_raw(): array
+{
+    try {
+        $configFile = USERS_DIR . 'adminConfig.json';
+        if (!is_file($configFile)) return [];
+        $encryptedContent = @file_get_contents($configFile);
+        if (!is_string($encryptedContent) || $encryptedContent === '') return [];
+        $key = isset($GLOBALS['encryptionKey']) ? (string)$GLOBALS['encryptionKey'] : '';
+        if ($key === '') return [];
+        $dec = decryptData($encryptedContent, $key);
+        if ($dec === false) return [];
+        $cfg = json_decode($dec, true);
+        return is_array($cfg) ? $cfg : [];
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+$envPublished = getenv('FR_PUBLISHED_URL');
+$published = '';
+if ($envPublished !== false && trim((string)$envPublished) !== '') {
+    $published = fr_sanitize_http_url($envPublished);
+} else {
+    $adminCfg = fr_read_admin_config_raw();
+    $published = fr_sanitize_http_url($adminCfg['publishedUrl'] ?? '');
+}
+
+if (!defined('FR_PUBLISHED_URL_EFFECTIVE')) {
+    define('FR_PUBLISHED_URL_EFFECTIVE', $published);
+}
+
+$envShare = getenv('SHARE_URL');
+if ($envShare !== false && trim((string)$envShare) !== '') {
+    define('SHARE_URL', (string)$envShare);
+} elseif ($published !== '') {
+    define('SHARE_URL', rtrim($published, '/') . '/api/file/share.php');
+} else {
+    define('SHARE_URL', $defaultShare);
+}
+
+// ------------------------------------------------------------
+// FileRise Pro bootstrap wiring
+// ------------------------------------------------------------
+
+// Inline license (optional; usually set via Admin UI and PRO_LICENSE_FILE)
+if (!defined('FR_PRO_LICENSE')) {
+    $envLicense = getenv('FR_PRO_LICENSE');
+    define('FR_PRO_LICENSE', $envLicense !== false ? trim((string)$envLicense) : '');
+}
+
+// JSON license file used by AdminController::setLicense()
+if (!defined('PRO_LICENSE_FILE')) {
+    define('PRO_LICENSE_FILE', rtrim(USERS_DIR, "/\\") . '/proLicense.json');
+}
+
+// Optional plain-text license file (used as fallback in bootstrap)
+if (!defined('FR_PRO_LICENSE_FILE')) {
+    $lf = getenv('FR_PRO_LICENSE_FILE');
+    if ($lf === false || $lf === '') {
+        $lf = rtrim(USERS_DIR, "/\\") . '/proLicense.txt';
+    }
+    define('FR_PRO_LICENSE_FILE', $lf);
+}
+
+// Where Pro code lives by default → inside users volume
+$proDir = getenv('FR_PRO_BUNDLE_DIR');
+if ($proDir === false || $proDir === '') {
+    $proDir = rtrim(USERS_DIR, "/\\") . '/pro';
+}
+$proDir = rtrim($proDir, "/\\");
+if (!defined('FR_PRO_BUNDLE_DIR')) {
+    define('FR_PRO_BUNDLE_DIR', $proDir);
+}
+
+// Optional core event-bus seam for guarded Pro registration.
+if (!function_exists('fr_eventbus_register')) {
+    function fr_eventbus_register(callable $listener): void
+    {
+        if (!class_exists(\FileRise\Support\EventBus::class)) {
+            return;
+        }
+        \FileRise\Support\EventBus::register($listener);
+    }
+}
+
+// Guarded Core MCP ops seam for Pro runtimes.
+if (!function_exists('fr_mcp_core_ops_dispatch')) {
+    function fr_mcp_core_ops_dispatch(string $operation, array $payload = [], array $authContext = []): array
+    {
+        if (!class_exists(\FileRise\Domain\McpCoreOpsService::class)) {
+            return [
+                'ok' => false,
+                'error' => 'Core MCP ops service unavailable.',
+                'status' => 500,
+            ];
+        }
+        return \FileRise\Domain\McpCoreOpsService::dispatch($operation, $payload, $authContext);
+    }
+}
+
+if (!function_exists('fr_mcp_core_ops_describe')) {
+    function fr_mcp_core_ops_describe(): array
+    {
+        if (!class_exists(\FileRise\Domain\McpCoreOpsService::class)) {
+            return [];
+        }
+        return \FileRise\Domain\McpCoreOpsService::describeOperations();
+    }
+}
+
+// ------------------------------------------------------------
+// Early Pro/Core API-level guards for bootstrap-time calls
+// ------------------------------------------------------------
+if (!defined('FR_PRO_API_REQUIRE_DISK_USAGE')) {
+    define('FR_PRO_API_REQUIRE_DISK_USAGE', 2);
+}
+if (!defined('FR_PRO_API_REQUIRE_SEARCH')) {
+    define('FR_PRO_API_REQUIRE_SEARCH', 3);
+}
+if (!defined('FR_PRO_API_REQUIRE_AUDIT')) {
+    define('FR_PRO_API_REQUIRE_AUDIT', 4);
+}
+if (!defined('FR_PRO_API_REQUIRE_SOURCES')) {
+    define('FR_PRO_API_REQUIRE_SOURCES', 5);
+}
+if (!function_exists('fr_pro_api_level_at_least')) {
+    function fr_pro_api_level_at_least(int $required): bool
+    {
+        $current = defined('FR_PRO_API_LEVEL') ? (int)FR_PRO_API_LEVEL : 0;
+        return $current >= $required;
+    }
+}
+
+$proBootstrap = FR_PRO_BUNDLE_DIR . '/bootstrap_pro.php';
+if (@is_file($proBootstrap)) {
+    require_once $proBootstrap;
+}
+
+// If bootstrap didn’t define these, give safe defaults
+if (!defined('FR_PRO_ACTIVE')) {
+    define('FR_PRO_ACTIVE', false);
+}
+if (!defined('FR_PRO_INFO')) {
+    define('FR_PRO_INFO', [
+        'valid'   => false,
+        'error'   => null,
+        'payload' => null,
+    ]);
+}
+if (!defined('FR_PRO_BUNDLE_VERSION')) {
+    define('FR_PRO_BUNDLE_VERSION', null);
+}
+
+// ------------------------------------------------------------
+// Pro / Core API-level compatibility helpers
+// ------------------------------------------------------------
+
+if (!defined('FR_CORE_API_LEVEL')) {
+    define('FR_CORE_API_LEVEL', 1);
+}
+
+if (!function_exists('fr_pro_api_level_from_version')) {
+    function fr_pro_api_level_from_version(?string $version): int
+    {
+        $v = trim((string)$version);
+        if ($v === '') return 0;
+        $v = ltrim($v, "vV");
+        $parts = explode('.', $v);
+        $major = (isset($parts[0]) && ctype_digit($parts[0])) ? (int)$parts[0] : 0;
+        $minor = (isset($parts[1]) && ctype_digit($parts[1])) ? (int)$parts[1] : 0;
+        if ($major <= 0) return 0;
+        if ($major === 1) {
+            return max(0, $minor);
+        }
+        return ($major * 100) + max(0, $minor);
+    }
+}
+
+if (!defined('FR_PRO_API_LEVEL')) {
+    define('FR_PRO_API_LEVEL', fr_pro_api_level_from_version(
+        defined('FR_PRO_BUNDLE_VERSION') ? (string)FR_PRO_BUNDLE_VERSION : ''
+    ));
+}
+
+if (!function_exists('fr_pro_api_level_at_least')) {
+    function fr_pro_api_level_at_least(int $required): bool
+    {
+        $current = defined('FR_PRO_API_LEVEL') ? (int)FR_PRO_API_LEVEL : 0;
+        return $current >= $required;
+    }
+}
+
+if (!defined('FR_PRO_API_REQUIRE_DISK_USAGE')) {
+    define('FR_PRO_API_REQUIRE_DISK_USAGE', 2);
+}
+if (!defined('FR_PRO_API_REQUIRE_SEARCH')) {
+    define('FR_PRO_API_REQUIRE_SEARCH', 3);
+}
+if (!defined('FR_PRO_API_REQUIRE_AUDIT')) {
+    define('FR_PRO_API_REQUIRE_AUDIT', 4);
+}
+if (!defined('FR_PRO_API_REQUIRE_SOURCES')) {
+    define('FR_PRO_API_REQUIRE_SOURCES', 5);
+}
