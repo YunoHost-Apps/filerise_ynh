@@ -7,7 +7,7 @@ name = "FileRise"
 description.en = "Web file manager"
 description.fr = "Gestionnaire de fichiers Web"
 
-version = "3.36.0~ynh1"
+version = "3.37.0~ynh1"
 
 maintainers = ["eric_G"]
 
@@ -42,8 +42,8 @@ ram.runtime = "50M"
     [resources.sources]
 
     [resources.sources.main]
-    url = "https://github.com/error311/FileRise/archive/refs/tags/v3.36.0.tar.gz"
-    sha256 = "723f12c774bcef3c0b12af75bd8512d75ba4a79e7c0aff7083de496e101e3acb"
+    url = "https://github.com/error311/FileRise/archive/refs/tags/v3.37.0.tar.gz"
+    sha256 = "42567c40be4c2b2a8d43f79ca369e4e640dbdc3c30290accfe48bbf21a4689f7"
 
     autoupdate.strategy = "latest_github_tag"
 
